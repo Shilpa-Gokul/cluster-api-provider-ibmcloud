@@ -37,6 +37,15 @@ build-image-linux-ppc64le: init-buildx
                 -t $(REGISTRY)/$(IMG):$(TAG)_linux_ppc64le . --target centos-base; \
         }
 
+build-image-linux-arm64: init-buildx
+	{                                                                   \
+        set -e ;                                                            \
+        docker buildx build \
+                --build-arg TARGETPLATFORM=linux/arm64 --build-arg ARCH=arm64 \
+                --build-arg POWERVS_CLOUD_CONTROLLER_COMMIT=$(POWERVS_CLOUD_CONTROLLER_COMMIT)\
+                -t $(REGISTRY)/$(IMG):$(TAG)_linux_arm64 . --target centos-base; \
+        }
+
 build-image-and-push-linux-amd64: init-buildx
 	{                                                                   \
 	set -e ;                                                            \
@@ -55,6 +64,15 @@ build-image-and-push-linux-ppc64le: init-buildx
 		-t $(REGISTRY)/$(IMG):$(TAG)_linux_ppc64le . --push --target centos-base; \
 	}
 
+build-image-and-push-linux-arm64: init-buildx
+	{                                                                    \
+	set -e ;                                                             \
+	docker buildx build \
+		--build-arg TARGETPLATFORM=linux/arm64 --build-arg ARCH=arm64\
+		--build-arg POWERVS_CLOUD_CONTROLLER_COMMIT=$(POWERVS_CLOUD_CONTROLLER_COMMIT)\
+		-t $(REGISTRY)/$(IMG):$(TAG)_linux_arm64 . --push --target centos-base; \
+	}
+
 init-buildx:
 	# Ensure we use a builder that can leverage it (the default on linux will not)
 	-docker buildx rm multiarch-multiplatform-builder
@@ -65,6 +83,6 @@ init-buildx:
 	gcloud auth configure-docker --quiet
 
 
-build-and-push-multi-arch: build-image-and-push-linux-amd64 build-image-and-push-linux-ppc64le
-	docker manifest create --amend $(REGISTRY)/$(IMG):$(TAG) $(REGISTRY)/$(IMG):$(TAG)_linux_amd64 $(REGISTRY)/$(IMG):$(TAG)_linux_ppc64le
+build-and-push-multi-arch: build-image-and-push-linux-amd64 build-image-and-push-linux-ppc64le build-image-and-push-linux-arm64
+	docker manifest create --amend $(REGISTRY)/$(IMG):$(TAG) $(REGISTRY)/$(IMG):$(TAG)_linux_amd64 $(REGISTRY)/$(IMG):$(TAG)_linux_ppc64le $(REGISTRY)/$(IMG):$(TAG)_linux_arm64
 	docker manifest push -p $(REGISTRY)/$(IMG):$(TAG)

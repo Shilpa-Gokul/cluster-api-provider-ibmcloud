@@ -26,9 +26,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	// +kubebuilder:scaffold:imports
+	capiv1beta1 "sigs.k8s.io/cluster-api/api/v1beta1"
+
 	infrav1beta2 "sigs.k8s.io/cluster-api-provider-ibmcloud/api/v1beta2"
 	"sigs.k8s.io/cluster-api-provider-ibmcloud/test/helpers"
-	capiv1beta1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
 var (

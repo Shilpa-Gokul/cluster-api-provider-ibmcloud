@@ -20,9 +20,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"os"
 	"time"
 
+	infrastructurev1beta2 "sigs.k8s.io/cluster-api-provider-ibmcloud/api/v1beta2"
 	// +kubebuilder:scaffold:imports
 	"github.com/spf13/pflag"
 
@@ -63,6 +65,7 @@ func init() {
 	_ = infrav1beta1.AddToScheme(scheme)
 	_ = infrav1beta2.AddToScheme(scheme)
 	_ = capiv1beta1.AddToScheme(scheme)
+	utilruntime.Must(infrastructurev1beta2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -120,6 +123,14 @@ func main() {
 	setupWebhooks(mgr)
 	setupChecks(mgr)
 
+	if err = (&controllers.IBMVPCClusterTemplateReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("IBMVPCClusterTemplate"),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "IBMVPCClusterTemplate")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
