@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/IBM-Cloud/power-go-client/power/models"
 	"github.com/IBM/go-sdk-core/v5/core"
 	"github.com/IBM/platform-services-go-sdk/resourcecontrollerv2"
 	"go.uber.org/mock/gomock"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	infrav1beta2 "sigs.k8s.io/cluster-api-provider-ibmcloud/api/v1beta2"
+	mockP "sigs.k8s.io/cluster-api-provider-ibmcloud/pkg/cloud/services/powervs/mock"
 	capiv1beta1 "sigs.k8s.io/cluster-api/api/v1beta1"
 
 	"sigs.k8s.io/cluster-api-provider-ibmcloud/cmd/capibmadm/utils"
@@ -1546,6 +1548,7 @@ func getPowerVSClusterScopeParams() PowerVSClusterScopeParams {
 				Zone:          ptr.To("zone"),
 				VPC:           &infrav1beta2.VPCResourceReference{Region: ptr.To("eu-gb")},
 				ResourceGroup: &infrav1beta2.IBMPowerVSResourceReference{ID: ptr.To("rg-id")},
+				DHCPServer:    &infrav1beta2.DHCPServer{ID: ptr.To("DHCPid")},
 			},
 		},
 		ClientFactory: ClientFactory{
@@ -1569,4 +1572,418 @@ func getPowerVSClusterScopeParams() PowerVSClusterScopeParams {
 			},
 		},
 	}
+}
+
+func TestGetNetwork(t *testing.T) {
+	var (
+		mockPowerVS *mockP.MockPowerVS
+		mockCtrl    *gomock.Controller
+	)
+
+	setup := func(t *testing.T) {
+		t.Helper()
+		mockCtrl = gomock.NewController(t)
+		mockPowerVS = mockP.NewMockPowerVS(mockCtrl)
+	}
+	teardown := func() {
+		mockCtrl.Finish()
+	}
+	t.Run("When network ID is not nil and GetNetworkByID is success", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		network := &models.Network{NetworkID: ptr.To("networkID")}
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().GetNetworkByID(gomock.Any()).Return(network, nil)
+			return mockPowerVS, nil
+		}
+
+		clusterScopeParams.IBMPowerVSCluster.Spec.Network = infrav1beta2.IBMPowerVSResourceReference{ID: ptr.To("networkID")}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		networkID, err := clusterScope.getNetwork()
+		g.Expect(err).To(BeNil())
+		g.Expect(networkID).To(Equal(network.NetworkID))
+	})
+	t.Run("When network ID is nil and DHCPServer is not empty", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.Name = ptr.To("server1")
+		networkName := fmt.Sprintf("DHCPSERVER%s_Private", *clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.Name)
+		network := &models.NetworkReference{NetworkID: ptr.To("networkID"), Name: &networkName}
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().GetNetworkByName(*network.Name).Return(network, nil)
+			return mockPowerVS, nil
+		}
+
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		networkID, err := clusterScope.getNetwork()
+		g.Expect(err).To(BeNil())
+		g.Expect(networkID).To(Equal(network.NetworkID))
+	})
+
+	t.Run("When network ID is nil and DHCPServer is also empty", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.IBMPowerVSCluster.Spec.Network = infrav1beta2.IBMPowerVSResourceReference{}
+		clusterScopeParams.IBMPowerVSCluster.Name = "ClusterName"
+		networkName := fmt.Sprintf("DHCPSERVER%s_Private", clusterScopeParams.IBMPowerVSCluster.Name)
+
+		network := &models.NetworkReference{NetworkID: ptr.To("networkID"), Name: &networkName}
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().GetNetworkByName(*network.Name).Return(network, nil)
+			return mockPowerVS, nil
+		}
+
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		networkID, err := clusterScope.getNetwork()
+		g.Expect(err).To(BeNil())
+		g.Expect(networkID).To(Equal(network.NetworkID))
+	})
+
+	t.Run("When network ID and DHCPServer is empty and GetNetworkByName returns error", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.IBMPowerVSCluster.Spec.Network = infrav1beta2.IBMPowerVSResourceReference{}
+		clusterScopeParams.IBMPowerVSCluster.Name = "ClusterName"
+		networkName := fmt.Sprintf("DHCPSERVER%s_Private", clusterScopeParams.IBMPowerVSCluster.Name)
+
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().GetNetworkByName(networkName).Return(nil, fmt.Errorf("GetNetworkByName error"))
+			return mockPowerVS, nil
+		}
+
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		networkID, err := clusterScope.getNetwork()
+		g.Expect(err).ToNot(BeNil())
+		g.Expect(networkID).To(BeNil())
+	})
+
+	t.Run("When network ID and DHCPServer is empty and GetNetworkByName returns empty network", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.IBMPowerVSCluster.Spec.Network = infrav1beta2.IBMPowerVSResourceReference{}
+		clusterScopeParams.IBMPowerVSCluster.Name = "ClusterName"
+		networkName := fmt.Sprintf("DHCPSERVER%s_Private", clusterScopeParams.IBMPowerVSCluster.Name)
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().GetNetworkByName(networkName).Return(nil, nil)
+			return mockPowerVS, nil
+		}
+
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		networkID, err := clusterScope.getNetwork()
+		g.Expect(err).To(BeNil())
+		g.Expect(networkID).To(BeNil())
+	})
+}
+
+func TestIsDHCPServerActive(t *testing.T) {
+	var (
+		mockPowerVS *mockP.MockPowerVS
+		mockCtrl    *gomock.Controller
+	)
+
+	setup := func(t *testing.T) {
+		t.Helper()
+		mockCtrl = gomock.NewController(t)
+		mockPowerVS = mockP.NewMockPowerVS(mockCtrl)
+	}
+	teardown := func() {
+		mockCtrl.Finish()
+	}
+
+	t.Run("When DHCPID is empty", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.ID = ptr.To("")
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		isActive, err := clusterScope.isDHCPServerActive()
+		g.Expect(err).To(Equal(fmt.Errorf("DHCP ID is empty")))
+		g.Expect(isActive).To(BeFalse())
+	})
+	t.Run("When GetDHCPServer returns error", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			dhcpServer := &models.DHCPServerDetail{ID: ptr.To("dhcpID"), Status: ptr.To(string(infrav1beta2.DHCPServerStateError))}
+			mockPowerVS.EXPECT().GetDHCPServer(gomock.Any()).Return(dhcpServer, nil)
+			return mockPowerVS, nil
+		}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		isActive, err := clusterScope.isDHCPServerActive()
+		g.Expect(err).ToNot(BeNil())
+		g.Expect(isActive).To(BeFalse())
+	})
+}
+
+func TestCheckDHCPServerStatus(t *testing.T) {
+	testCases := []struct {
+		name           string
+		dhcpServer     models.DHCPServerDetail
+		expectedStatus bool
+	}{
+		{
+			name:           "test DHCP server state build",
+			dhcpServer:     models.DHCPServerDetail{ID: ptr.To("dhcpIDBuild"), Status: ptr.To(string(infrav1beta2.DHCPServerStateBuild))},
+			expectedStatus: false,
+		},
+		{
+			name:           "test DHCP server state active",
+			dhcpServer:     models.DHCPServerDetail{ID: ptr.To("dhcpIDActive"), Status: ptr.To(string(infrav1beta2.DHCPServerStateActive))},
+			expectedStatus: true,
+		},
+		{
+			name:           "test DHCP server state error",
+			dhcpServer:     models.DHCPServerDetail{ID: ptr.To("dhcpIDError"), Status: ptr.To(string(infrav1beta2.DHCPServerStateError))},
+			expectedStatus: false,
+		},
+		{
+			name:           "test DHCP server state invalid value",
+			dhcpServer:     models.DHCPServerDetail{ID: ptr.To("dhcpIDError"), Status: ptr.To("InvalidState")},
+			expectedStatus: false,
+		},
+	}
+	for _, tc := range testCases {
+		g := NewWithT(t)
+		clusterScope := PowerVSClusterScope{}
+		t.Run(tc.name, func(_ *testing.T) {
+			status, _ := clusterScope.checkDHCPServerStatus(tc.dhcpServer)
+			g.Expect(status).To(Equal(tc.expectedStatus))
+		})
+	}
+
+}
+
+func TestCreateDHCPServer(t *testing.T) {
+	var (
+		mockPowerVS *mockP.MockPowerVS
+		mockCtrl    *gomock.Controller
+	)
+
+	setup := func(t *testing.T) {
+		t.Helper()
+		mockCtrl = gomock.NewController(t)
+		mockPowerVS = mockP.NewMockPowerVS(mockCtrl)
+	}
+	teardown := func() {
+		mockCtrl.Finish()
+	}
+	t.Run("When dhcpServerDetails is empty", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		dhcpNetwork := &models.DHCPServerNetwork{ID: ptr.To("dhcpNetworkID")}
+		dhcpServer := &models.DHCPServer{ID: ptr.To("dhcpID"), Network: dhcpNetwork}
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer = nil
+		clusterScopeParams.IBMPowerVSCluster.Name = "clusterName"
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().CreateDHCPServer(gomock.Any()).Return(dhcpServer, nil)
+			return mockPowerVS, nil
+		}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+		dhcpID, err := clusterScope.createDHCPServer()
+		g.Expect(dhcpID).To(Equal(dhcpServer.ID))
+		g.Expect(err).To(BeNil())
+		g.Expect(clusterScope.IBMPowerVSCluster.Status.Network.ID).To(Equal(dhcpNetwork.ID))
+	})
+
+	t.Run("When dhcpServerDetails are all set properly", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		//dhcpNetwork := &models.DHCPServerNetwork{ID: ptr.To("dhcpNetworkID")}
+		dhcpServer := &models.DHCPServer{ID: ptr.To("dhcpID")}
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.DNSServer = ptr.To("DNSServer")
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.Cidr = ptr.To("10.10.1.10/24")
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.Snat = ptr.To(true)
+		clusterScopeParams.IBMPowerVSCluster.Name = "clusterName"
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().CreateDHCPServer(gomock.Any()).Return(dhcpServer, nil)
+			return mockPowerVS, nil
+		}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+		dhcpID, err := clusterScope.createDHCPServer()
+		g.Expect(dhcpID).To(BeNil())
+		g.Expect(err).ToNot(BeNil())
+	})
+
+	t.Run("When dhcpServerDetails are all set properly", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.IBMPowerVSCluster.Name = "clusterName"
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().CreateDHCPServer(gomock.Any()).Return(nil, nil)
+			return mockPowerVS, nil
+		}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+		dhcpID, err := clusterScope.createDHCPServer()
+		g.Expect(dhcpID).To(BeNil())
+		g.Expect(err).ToNot(BeNil())
+	})
+}
+func TestReconcileNetwork(t *testing.T) {
+	var (
+		mockPowerVS *mockP.MockPowerVS
+		mockCtrl    *gomock.Controller
+	)
+
+	setup := func(t *testing.T) {
+		t.Helper()
+		mockCtrl = gomock.NewController(t)
+		mockPowerVS = mockP.NewMockPowerVS(mockCtrl)
+	}
+	teardown := func() {
+		mockCtrl.Finish()
+	}
+	t.Run("When GetDHCPServer returns error", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().GetDHCPServer(gomock.Any()).Return(nil, fmt.Errorf("GetDHCPServer error"))
+			return mockPowerVS, nil
+		}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		requeue, err := clusterScope.ReconcileNetwork()
+		g.Expect(err).ToNot(BeNil())
+		g.Expect(requeue).To(BeFalse())
+	})
+	t.Run("When DHCPServer exists and is active", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			dhcpServer := &models.DHCPServerDetail{ID: ptr.To("dhcpID"), Status: ptr.To(string(infrav1beta2.DHCPServerStateActive))}
+			mockPowerVS.EXPECT().GetDHCPServer(gomock.Any()).Return(dhcpServer, nil)
+			return mockPowerVS, nil
+		}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		requeue, err := clusterScope.ReconcileNetwork()
+		g.Expect(err).To(BeNil())
+		g.Expect(requeue).To(BeTrue())
+	})
+	t.Run("When DHCPID is empty and GetNetworkByID returns error ", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			network := &models.Network{}
+			mockPowerVS.EXPECT().GetNetworkByID(gomock.Any()).Return(network, fmt.Errorf("GetNetworkByID error"))
+			return mockPowerVS, nil
+		}
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.ID = nil
+		clusterScopeParams.IBMPowerVSCluster.Spec.Network = infrav1beta2.IBMPowerVSResourceReference{ID: ptr.To("networkID")}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		requeue, err := clusterScope.ReconcileNetwork()
+		g.Expect(err).ToNot(BeNil())
+		g.Expect(requeue).To(BeFalse())
+	})
+	t.Run("When DHCPID is empty and networkID is not empty", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+		network := &models.Network{NetworkID: ptr.To("networkID")}
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().GetNetworkByID(gomock.Any()).Return(network, nil)
+			return mockPowerVS, nil
+		}
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.ID = nil
+		clusterScopeParams.IBMPowerVSCluster.Spec.Network = infrav1beta2.IBMPowerVSResourceReference{ID: ptr.To("networkID")}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		requeue, err := clusterScope.ReconcileNetwork()
+		g.Expect(clusterScope.IBMPowerVSCluster.Status.Network.ID).To(Equal(network.NetworkID))
+		g.Expect(err).To(BeNil())
+		g.Expect(requeue).To(BeTrue())
+	})
+	t.Run("When DHCPID is empty and checkNetwork returns empty network ID", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		network := &models.Network{}
+		dhcpNetwork := &models.DHCPServerNetwork{ID: ptr.To("dhcpNetworkID")}
+		dhcpServer := &models.DHCPServer{ID: ptr.To("dhcpID"), Network: dhcpNetwork}
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			mockPowerVS.EXPECT().GetNetworkByID(gomock.Any()).Return(network, nil)
+			mockPowerVS.EXPECT().CreateDHCPServer(gomock.Any()).Return(dhcpServer, nil)
+			return mockPowerVS, nil
+		}
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.ID = nil
+		clusterScopeParams.IBMPowerVSCluster.Spec.Network = infrav1beta2.IBMPowerVSResourceReference{ID: ptr.To("networkID")}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		requeue, err := clusterScope.ReconcileNetwork()
+		g.Expect(clusterScope.IBMPowerVSCluster.Status.DHCPServer.ID).To(Equal(dhcpServer.ID))
+		g.Expect(clusterScope.IBMPowerVSCluster.Status.Network.ID).To(Equal(dhcpNetwork.ID))
+		g.Expect(err).To(BeNil())
+		g.Expect(requeue).To(BeFalse())
+
+	})
+	t.Run("When DHCPID and networkID is not empty and createDHCPServer returns error", func(t *testing.T) {
+		g := NewWithT(t)
+		setup(t)
+		t.Cleanup(teardown)
+
+		clusterScopeParams := getPowerVSClusterScopeParams()
+		clusterScopeParams.PowerVSClientFactory = func() (powervs.PowerVS, error) {
+			network := &models.Network{}
+			mockPowerVS.EXPECT().GetNetworkByID(gomock.Any()).Return(network, nil)
+			mockPowerVS.EXPECT().CreateDHCPServer(gomock.Any()).Return(nil, fmt.Errorf("CreateDHCPServer error"))
+			return mockPowerVS, nil
+		}
+		clusterScopeParams.IBMPowerVSCluster.Spec.DHCPServer.ID = nil
+		clusterScopeParams.IBMPowerVSCluster.Spec.Network = infrav1beta2.IBMPowerVSResourceReference{ID: ptr.To("networkID")}
+		clusterScope, _ := NewPowerVSClusterScope(clusterScopeParams)
+
+		requeue, err := clusterScope.ReconcileNetwork()
+		g.Expect(err).ToNot(BeNil())
+		g.Expect(requeue).To(BeFalse())
+
+	})
+
 }
